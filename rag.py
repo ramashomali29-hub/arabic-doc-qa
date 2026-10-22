@@ -1,14 +1,18 @@
+import logging
 import os
+
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_ollama import ChatOllama
 
-import logging
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+MIN_SCORE = float(os.getenv("MIN_SCORE", "0.35"))
 
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
@@ -17,9 +21,8 @@ embeddings = HuggingFaceEmbeddings(
 db = Chroma(collection_name="docs", embedding_function=embeddings,
             persist_directory="chroma_db",
             collection_metadata={"hnsw:space": "cosine"})
-llm = ChatOllama(model="qwen2.5:3b", temperature=0)
+llm = ChatOllama(model=OLLAMA_MODEL, base_url=OLLAMA_BASE_URL, temperature=0)
 
-MIN_SCORE = 0.35
 NO_ANSWER = "لا تتوفر معلومات عن هذا السؤال في المستندات."
 
 SYSTEM_PROMPT = f"""You answer questions using ONLY the provided context from legal documents.
@@ -39,7 +42,7 @@ def add_pdf(path):
 def ask(question):
     results = db.similarity_search_with_relevance_scores(question, k=4)
     for d, score in results:
-                logger.info("score=%.3f page=%s", score, d.metadata.get("page", 0) + 1)
+        logger.info("score=%.3f page=%s", score, d.metadata.get("page", 0) + 1)
 
     relevant = [d for d, score in results if score >= MIN_SCORE]
     if not relevant:

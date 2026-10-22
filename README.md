@@ -16,6 +16,7 @@ Everything runs locally: no paid APIs, and no document data leaves the machine.
 - Prompt-injection testing with documented results
 - Automated API tests with pytest, run by GitHub Actions on every push and pull request
 - Structured logging of retrieval relevance scores
+- One-command deployment with Docker Compose (app + local LLM), running as a non-root user
 
 ## Tech Stack
 
@@ -29,6 +30,7 @@ Everything runs locally: no paid APIs, and no document data leaves the machine.
 | LLM | Qwen 2.5 (3B) via Ollama, running locally |
 | Testing | pytest, FastAPI TestClient |
 | CI | GitHub Actions |
+| Containers | Docker, Docker Compose |
 
 ## How It Works
 
@@ -53,12 +55,46 @@ arabic-doc-qa/
 ├── .github/workflows/
 │   └── tests.yml            # CI: runs tests on every push and pull request
 ├── screenshots/             # Test results used in this README
+├── Dockerfile               # App image (non-root, CPU-only PyTorch)
+├── docker-compose.yml       # App + Ollama services
+├── .env.example             # Configuration template
 ├── requirements.txt         # App dependencies
 ├── requirements-dev.txt     # Test dependencies
 └── pytest.ini               # Test configuration
 ```
 
-## Setup
+## Run with Docker (recommended)
+
+**Requirements:** [Docker Desktop](https://www.docker.com/products/docker-desktop/)
+
+```bash
+cp .env.example .env
+docker compose up --build -d
+docker compose exec ollama ollama pull qwen2.5:3b
+```
+
+Open `http://127.0.0.1:8000/docs`. The first start downloads the embedding model, which is then cached in a volume.
+
+**Configuration** is read from environment variables (`.env`), so no settings are hard-coded:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Where the LLM is served (`http://ollama:11434` in Docker) |
+| `OLLAMA_MODEL` | `qwen2.5:3b` | LLM used for answers |
+| `MIN_SCORE` | `0.35` | Relevance threshold for retrieved chunks |
+
+`.env` is excluded from Git and from the Docker build context; only `.env.example` is committed.
+
+**Container security choices:**
+- The app runs as a non-root user (`appuser`).
+- The API port is bound to `127.0.0.1` only, so it is not exposed to the local network.
+- The Ollama service has no published port; only the app can reach it over the internal Docker network.
+- `.dockerignore` keeps the virtual environment, local data, and `.env` out of the image.
+- CPU-only PyTorch keeps the image several GB smaller.
+
+Data (vector database, model files, embedding cache) is stored in named volumes, so it survives container restarts.
+
+## Run Locally (without Docker)
 
 **Requirements:** Python 3.12, [Ollama](https://ollama.com)
 
@@ -100,7 +136,7 @@ The AI layer is replaced with a lightweight mock during tests, so the full suite
 | `test_upload_rejects_large_file` | Files over 10 MB are rejected |
 | `test_upload_blocks_path_traversal` | Filenames like `../../evil.pdf` cannot write outside the upload folder |
 
-All tests run automatically through GitHub Actions on every push and pull request. Changes are developed on feature branches and merged through pull requests only after CI passes.
+All tests run automatically through GitHub Actions on every push and pull request, and a second CI job verifies that the Docker image builds. Changes are developed on feature branches and merged through pull requests only after CI passes.
 
 ## Manual Testing & Findings
 
@@ -151,7 +187,7 @@ The system returned the full set of individual tax brackets (5% up to 30%) and c
 - **Prompt injection:** add input screening for known injection patterns and output checks that verify answers are grounded in the cited chunks.
 - **Arabic PDF extraction:** some government PDFs store Arabic text out of order, which can affect numbers and nearby words. Comparing extraction tools (PyMuPDF, OCR) is a planned improvement.
 - **Evaluation:** build a small labeled set of questions to measure answer accuracy and tune the threshold more rigorously.
-- **Deployment:** containerize with Docker and add authentication on the upload endpoint.
+- **Access control:** add authentication on the upload endpoint before any shared deployment.
 
 ## Author
 
