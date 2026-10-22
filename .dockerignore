@@ -1,0 +1,9 @@
+venv/
+chroma_db/
+uploads/
+__pycache__/
+.pytest_cache/
+.git/
+screenshots/
+tests/
+.env
