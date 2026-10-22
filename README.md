@@ -1,5 +1,7 @@
 # Arabic Document Q&A (RAG)
 
+![tests](https://github.com/ramashomali29-hub/arabic-doc-qa/actions/workflows/tests.yml/badge.svg)
+
 A Retrieval-Augmented Generation (RAG) API that answers questions over Arabic legal PDFs and cites the exact pages it used. Tested on **Jordan's Income Tax Law No. 34 of 2014 (with amendments)**.
 
 Everything runs locally: no paid APIs, and no document data leaves the machine.
@@ -12,6 +14,8 @@ Everything runs locally: no paid APIs, and no document data leaves the machine.
 - Secure file handling: PDF signature check, size limit, and filename sanitization
 - Input validation on questions (length limits)
 - Prompt-injection testing with documented results
+- Automated API tests with pytest, run by GitHub Actions on every push and pull request
+- Structured logging of retrieval relevance scores
 
 ## Tech Stack
 
@@ -23,6 +27,8 @@ Everything runs locally: no paid APIs, and no document data leaves the machine.
 | Embeddings | `paraphrase-multilingual-MiniLM-L12-v2` (supports Arabic) |
 | Vector database | ChromaDB (cosine similarity) |
 | LLM | Qwen 2.5 (3B) via Ollama, running locally |
+| Testing | pytest, FastAPI TestClient |
+| CI | GitHub Actions |
 
 ## How It Works
 
@@ -35,6 +41,22 @@ Question → embed → retrieve top 4 chunks → relevance filter → LLM → an
 2. **Retrieval:** the question is embedded and the 4 closest chunks are retrieved with a cosine relevance score.
 3. **Relevance filter:** chunks scoring below `0.35` are discarded. If none remain, the API returns "no information" without calling the LLM.
 4. **Generation:** the remaining chunks are passed to the LLM with a system prompt that restricts it to the context and treats the context as data, not instructions.
+
+## Project Structure
+
+```
+arabic-doc-qa/
+├── main.py                  # FastAPI app: upload and ask endpoints, input validation
+├── rag.py                   # RAG pipeline: parsing, chunking, embeddings, retrieval, LLM
+├── tests/
+│   └── test_api.py          # API and security tests
+├── .github/workflows/
+│   └── tests.yml            # CI: runs tests on every push and pull request
+├── screenshots/             # Test results used in this README
+├── requirements.txt         # App dependencies
+├── requirements-dev.txt     # Test dependencies
+└── pytest.ini               # Test configuration
+```
 
 ## Setup
 
@@ -59,7 +81,28 @@ Open `http://127.0.0.1:8000/docs` to use the interactive API.
 | `POST /upload` | Upload a PDF (max 10 MB). Returns the number of chunks stored. |
 | `POST /ask` | Body: `{"question": "..."}` (1–500 chars). Returns `answer` and `sources`. |
 
-## Testing & Findings
+## Automated Tests
+
+```bash
+pip install -r requirements-dev.txt
+pytest -v
+```
+
+The AI layer is replaced with a lightweight mock during tests, so the full suite runs in under a second without loading the embedding model or the LLM. This keeps CI fast and focuses the tests on the API contract and security controls.
+
+| Test | What it verifies |
+|---|---|
+| `test_ask_returns_answer_and_sources` | `/ask` returns an answer with its sources |
+| `test_empty_question_rejected` | Empty questions are rejected (422) |
+| `test_too_long_question_rejected` | Questions over 500 characters are rejected (422) |
+| `test_upload_valid_pdf` | A valid PDF is accepted and chunked |
+| `test_upload_rejects_non_pdf` | Files without a PDF signature are rejected, even with a `.pdf` name |
+| `test_upload_rejects_large_file` | Files over 10 MB are rejected |
+| `test_upload_blocks_path_traversal` | Filenames like `../../evil.pdf` cannot write outside the upload folder |
+
+All tests run automatically through GitHub Actions on every push and pull request. Changes are developed on feature branches and merged through pull requests only after CI passes.
+
+## Manual Testing & Findings
 
 ### 1. Answering from the document
 
