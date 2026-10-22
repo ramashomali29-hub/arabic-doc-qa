@@ -5,6 +5,11 @@ from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_chroma import Chroma
 from langchain_ollama import ChatOllama
 
+import logging
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 embeddings = HuggingFaceEmbeddings(
     model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
     encode_kwargs={"normalize_embeddings": True},
@@ -34,7 +39,7 @@ def add_pdf(path):
 def ask(question):
     results = db.similarity_search_with_relevance_scores(question, k=4)
     for d, score in results:
-        print(f"score={score:.3f} page={d.metadata.get('page', 0) + 1}")
+                logger.info("score=%.3f page=%s", score, d.metadata.get("page", 0) + 1)
 
     relevant = [d for d, score in results if score >= MIN_SCORE]
     if not relevant:
