@@ -9,3 +9,7 @@ langchain-chroma
 langchain-ollama
 sentence-transformers
 pymupdf
+pdfplumber
+python-docx
+azure-ai-documentintelligence
+python-dotenv
