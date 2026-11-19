@@ -4,13 +4,15 @@
 
 A Retrieval-Augmented Generation (RAG) API that answers questions over Arabic legal PDFs and cites the exact pages it used. Tested on **Jordan's Income Tax Law No. 34 of 2014 (with amendments)**.
 
-Everything runs locally: no paid APIs, and no document data leaves the machine.
+Question answering runs locally (no paid LLM APIs). Scanned or badly encoded pages can optionally be read with **Azure AI Document Intelligence** OCR; when OCR is not configured, no document data leaves the machine.
 
 ## Features
 
 - Upload Arabic PDFs and ask questions in Arabic or English
 - Answers grounded only in the uploaded documents, with page-level citations
 - Relevance filter that refuses out-of-scope questions instead of inventing answers
+- **Structured answers:** the model returns validated JSON (answer, grounded flag, passages used), and the API returns page-level citations with relevance scores
+- **OCR for scanned Arabic PDFs** with Azure AI Document Intelligence: only pages that are empty or have broken Arabic are sent to OCR, and page numbers are preserved for citations
 - Secure file handling: PDF signature check, size limit, and filename sanitization
 - Input validation on questions (length limits)
 - Prompt-injection testing with documented results
@@ -25,6 +27,7 @@ Everything runs locally: no paid APIs, and no document data leaves the machine.
 | API | FastAPI, Uvicorn |
 | RAG framework | LangChain |
 | PDF parsing | PyMuPDF (handles Arabic text better than default loaders) |
+| OCR (optional) | Azure AI Document Intelligence (`prebuilt-read`) |
 | Embeddings | `paraphrase-multilingual-MiniLM-L12-v2` (supports Arabic) |
 | Vector database | ChromaDB (cosine similarity) |
 | LLM | Qwen 2.5 (3B) via Ollama, running locally |
@@ -39,10 +42,10 @@ PDF → PyMuPDF → split into 800-char chunks → multilingual embeddings → C
 Question → embed → retrieve top 4 chunks → relevance filter → LLM → answer + page citations
 ```
 
-1. **Ingestion:** the PDF is parsed, split into overlapping chunks, embedded, and stored in ChromaDB.
+1. **Ingestion:** the PDF is parsed page by page. Pages with almost no text (scanned) or broken Arabic are re-read with Azure OCR, then all pages are split into overlapping chunks, embedded, and stored in ChromaDB.
 2. **Retrieval:** the question is embedded and the 4 closest chunks are retrieved with a cosine relevance score.
 3. **Relevance filter:** chunks scoring below `0.35` are discarded. If none remain, the API returns "no information" without calling the LLM.
-4. **Generation:** the remaining chunks are passed to the LLM with a system prompt that restricts it to the context and treats the context as data, not instructions.
+4. **Generation:** the remaining chunks are numbered and passed to the LLM with a system prompt that restricts it to the context and treats the context as data, not instructions. The model returns structured JSON (`answer`, `found`, `used_passages`); passage numbers are validated before they become citations, and if the JSON is invalid the API falls back to a plain answer.
 
 ## Project Structure
 
@@ -115,7 +118,32 @@ Open `http://127.0.0.1:8000/docs` to use the interactive API.
 | Endpoint | Description |
 |---|---|
 | `POST /upload` | Upload a PDF (max 10 MB). Returns the number of chunks stored. |
-| `POST /ask` | Body: `{"question": "..."}` (1–500 chars). Returns `answer` and `sources`. |
+| `POST /ask` | Body: `{"question": "..."}` (1–500 chars). Returns `answer`, `grounded`, `citations` (file, page, score, ocr), and `sources`. |
+
+Example response:
+
+```json
+{
+  "answer": "...",
+  "grounded": true,
+  "citations": [{"file": "income_tax_law_2014.pdf", "page": 11, "score": 0.68, "ocr": false}],
+  "sources": ["income_tax_law_2014.pdf - page 11"]
+}
+```
+
+## Optional: Azure OCR
+
+1. Create an **Azure AI Document Intelligence** resource (the Free F0 tier allows 500 pages per month and files up to 4 MB).
+2. Add the endpoint and key to `.env` (never commit this file; it is in `.gitignore`):
+
+```
+AZURE_DI_ENDPOINT=https://<your-resource>.cognitiveservices.azure.com/
+AZURE_DI_KEY=<your-key>
+```
+
+3. Try it: `python try_ocr.py` turns two pages of the law into an image-only PDF and reads them back with OCR.
+
+If OCR is not configured, or fails (size limit, quota, network), ingestion logs a warning and continues with the original text.
 
 ## Automated Tests
 
@@ -135,6 +163,9 @@ The AI layer is replaced with a lightweight mock during tests, so the full suite
 | `test_upload_rejects_non_pdf` | Files without a PDF signature are rejected, even with a `.pdf` name |
 | `test_upload_rejects_large_file` | Files over 10 MB are rejected |
 | `test_upload_blocks_path_traversal` | Filenames like `../../evil.pdf` cannot write outside the upload folder |
+| `test_page_needs_ocr_*` | Empty pages and broken Arabic (presentation forms) are sent to OCR; clean pages are not |
+| `test_ocr_disabled_without_credentials` | OCR stays off when no Azure credentials are set |
+| `test_ocr_pdf_returns_text_per_page` | OCR output is mapped to text per page (Azure client mocked) |
 
 All tests run automatically through GitHub Actions on every push and pull request, and a second CI job verifies that the Docker image builds. Changes are developed on feature branches and merged through pull requests only after CI passes.
 
@@ -182,10 +213,17 @@ The system returned the full set of individual tax brackets (5% up to 30%) and c
 
 **Honest assessment:** in both cases the relevance filter, not the model itself, stopped the attack. The embedded case also shows a trade-off: a legitimate question was refused because of the appended text (a false negative). The relevance filter is a useful first layer, but it is not a complete defense against prompt injection.
 
+### 4. OCR on a scanned document
+
+`try_ocr.py` converted the first two pages of the law into images only, so normal extraction found **no text at all**. Azure Document Intelligence read both pages correctly in Arabic, including the law title (Law No. 34 of 2014), Articles 1 and 2, and the definitions.
+
+While testing, the first attempt failed because the generated PDF was 23 MB, above the free tier's 4 MB limit. The fix was JPEG compression for scanned pages and a size check before calling the API, with a clear error message.
+
 ## Limitations & Next Steps
 
 - **Prompt injection:** add input screening for known injection patterns and output checks that verify answers are grounded in the cited chunks.
-- **Arabic PDF extraction:** some government PDFs store Arabic text out of order, which can affect numbers and nearby words. Comparing extraction tools (PyMuPDF, OCR) is a planned improvement.
+- **Arabic PDF extraction:** broken or scanned pages now fall back to Azure OCR. Next: measure extraction accuracy on more government PDFs and compare OCR and direct extraction page by page.
+- **Free-tier OCR limits:** F0 reads only the first 2 pages of each document and accepts files up to 4 MB; larger documents need a paid tier or splitting into smaller files.
 - **Evaluation:** build a small labeled set of questions to measure answer accuracy and tune the threshold more rigorously.
 - **Access control:** add authentication on the upload endpoint before any shared deployment.
 
